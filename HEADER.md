@@ -53,6 +53,15 @@ granular resources for properties the per-resource split cannot give you:
   exactly where the portal exports them; the module supplies only the VALUES and validates the
   two halves against each other at plan time (undeclared values, missing `$connections`
   declarations and unknown callback triggers all fail the plan, not the run).
+- **Sibling dispatch is ordered.** ARM validates a native `Workflow` dispatch action's TARGET at
+  PUT time (`NestedWorkflowNotFound`, proven live), and sibling references must be CONSTRUCTED
+  ARM ids (a module-output reference from a definition would be a dependency cycle). Mark any
+  workflow that dispatches to a sibling with `deploy_tier = 1` and it deploys after every tier-0
+  workflow, in the same module call.
+- **Plans stay quiet.** The default `response_export_values` is a trimmed stable set: `["*"]`
+  echoes the whole GET response including volatile fields (`changedTime` and friends), which
+  makes every plan a no-op update-in-place on every workflow (proven live). Widen it per
+  workflow when you need more of the response.
 - **Secrets stay out of state.** `SecureString` / `SecureObject` parameter values ride the
   provider's write-only `sensitive_body`, so they never appear in the plan output or the state's
   body. Rotation is detected by the provider's private-state hash; `sensitive_body_version` is

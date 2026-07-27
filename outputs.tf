@@ -1,6 +1,6 @@
 output "access_endpoints" {
   description = "Map of workflow name to its access endpoint (from the PUT response)."
-  value       = { for k, r in azapi_resource.this : k => try(r.output.properties.accessEndpoint, null) }
+  value       = { for k, r in local.workflow_resources : k => try(r.output.properties.accessEndpoint, null) }
 }
 
 output "callback_urls" {
@@ -17,7 +17,7 @@ output "diagnostic_setting_ids" {
 output "identities" {
   description = "Map of workflow name to its identity { principal_id, tenant_id } (principal_id is populated for system-assigned identities), for role assignments."
   value = {
-    for k, r in azapi_resource.this : k => try({
+    for k, r in local.workflow_resources : k => try({
       principal_id = r.identity[0].principal_id
       tenant_id    = r.identity[0].tenant_id
     }, null)
@@ -26,17 +26,17 @@ output "identities" {
 
 output "ids" {
   description = "Map of workflow name to its resource id."
-  value       = { for k, r in azapi_resource.this : k => r.id }
+  value       = { for k, r in local.workflow_resources : k => r.id }
 }
 
 output "ids_zipmap" {
   description = "Map of workflow name to a { name, id } object, for passing where both are needed together."
-  value       = { for k, r in azapi_resource.this : k => { name = r.name, id = r.id } }
+  value       = { for k, r in local.workflow_resources : k => { name = r.name, id = r.id } }
 }
 
 output "names" {
   description = "The workflow names."
-  value       = keys(azapi_resource.this)
+  value       = keys(local.workflow_resources)
 }
 
 output "tags" {
@@ -47,7 +47,7 @@ output "tags" {
 output "workflows" {
   description = "Map of workflow name to { id, name, location, state, and the raw exported properties } for anything the typed outputs do not surface (outbound IPs, endpoints configuration)."
   value = {
-    for k, r in azapi_resource.this : k => {
+    for k, r in local.workflow_resources : k => {
       id         = r.id
       name       = r.name
       location   = r.location

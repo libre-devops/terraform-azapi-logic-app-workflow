@@ -1002,3 +1002,101 @@ run "warns_on_valueless_parameter" {
 
   expect_failures = [check.declared_parameters_have_values]
 }
+
+# Tier-1 workflows deploy through the late resource, after every tier-0 workflow (ARM validates a
+# native Workflow dispatch action's target at PUT time: NestedWorkflowNotFound, proven live).
+run "tier_one_deploys_late" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Leaf workflow"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+            },
+            "actions": {
+              "Compose_greeting": { "type": "Compose", "inputs": "hello", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+      }
+
+      "logic-ldo-uks-tst-02" = {
+        title       = "HTTP - Dispatches to the leaf by constructed id"
+        deploy_tier = 1
+        definition  = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Dispatch_leaf": { "type": "Workflow", "inputs": { "host": { "triggerName": "Recurrence_daily", "workflow": { "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ldo-uks-tst-01/providers/Microsoft.Logic/workflows/logic-ldo-uks-tst-01" } } }, "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = contains(keys(azapi_resource.this), "logic-ldo-uks-tst-01") && !contains(keys(azapi_resource.this), "logic-ldo-uks-tst-02")
+    error_message = "Tier 0 should hold only the leaf workflow."
+  }
+
+  assert {
+    condition     = contains(keys(azapi_resource.late), "logic-ldo-uks-tst-02") && length(azapi_resource.late) == 1
+    error_message = "Tier 1 should hold only the dispatching workflow."
+  }
+}
+
+# The default response_export_values is the trimmed stable set, never ["*"]: the full GET echo
+# includes volatile fields (changedTime and friends) that make every plan a no-op update.
+run "default_exports_are_trimmed" {
+  command = plan
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].response_export_values == tolist(["identity", "properties.accessEndpoint", "properties.state", "properties.endpointsConfiguration"])
+    error_message = "The default response_export_values should be the trimmed stable set."
+  }
+}
+
+# Validation: only tiers 0 and 1 exist.
+run "rejects_bad_tier" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title       = "Recurrence - Bad tier"
+        deploy_tier = 2
+        definition  = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+            },
+            "actions": {
+              "Compose_greeting": { "type": "Compose", "inputs": "hello", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}

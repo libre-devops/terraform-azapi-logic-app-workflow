@@ -109,8 +109,14 @@ variable "workflows" {
                   right way to let an action group or app call an HTTP trigger without shared
                   SAS exposure.
       enabled, integration_account_id  Pass-throughs (enabled maps to properties.state).
+      deploy_tier  0 (default) or 1. Tier 1 deploys AFTER every tier-0 workflow: ARM validates a
+                  native Workflow dispatch action's TARGET at PUT time (NestedWorkflowNotFound,
+                  proven live), so a workflow whose definition invokes a sibling by id must deploy
+                  in tier 1 (and reference the sibling by CONSTRUCTED ARM id, never this module's
+                  outputs, which would be a dependency cycle).
       response_export_values, ignore_missing_property, ignore_null_property, ignore_casing
-                  azapi passthroughs, defaulted for a stable diff.
+                  azapi passthroughs, defaulted for a stable diff (see deploy_tier and the
+                  trimmed response_export_values default).
   EOT
   type = map(object({
     title   = string
@@ -161,7 +167,13 @@ variable "workflows" {
 
     integration_account_id = optional(string)
 
-    response_export_values  = optional(list(string), ["*"])
+    deploy_tier = optional(number, 0)
+
+    # Trimmed by default, deliberately: ["*"] echoes the whole GET response including volatile
+    # fields (changedTime and friends), which makes every plan show a no-op update-in-place on
+    # every workflow (proven live). The default exports only the stable fields the module's
+    # outputs read; widen it per workflow if you need more.
+    response_export_values  = optional(list(string), ["identity", "properties.accessEndpoint", "properties.state", "properties.endpointsConfiguration"])
     ignore_missing_property = optional(bool, true)
     ignore_null_property    = optional(bool, true)
     ignore_casing           = optional(bool, true)
@@ -258,5 +270,10 @@ variable "workflows" {
       contains(try(keys(jsondecode(w.definition).triggers), []), coalesce(w.callback_trigger_name, "?"))
     ])
     error_message = "callback_trigger_name must name a trigger the definition declares."
+  }
+
+  validation {
+    condition     = alltrue([for w in values(var.workflows) : contains([0, 1], w.deploy_tier)])
+    error_message = "deploy_tier must be 0 (default) or 1 (deploys after every tier-0 workflow; for definitions that dispatch to sibling workflows by id)."
   }
 }
