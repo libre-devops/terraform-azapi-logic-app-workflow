@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.9.0, < 2.0.0"
+  # 1.11 floor: secure parameter values ride the provider's write-only sensitive_body, and
+  # write-only attributes only exist from Terraform 1.11.
+  required_version = ">= 1.11.0, < 2.0.0"
 
   required_providers {
     azapi = {

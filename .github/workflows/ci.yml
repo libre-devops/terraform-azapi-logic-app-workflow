@@ -16,9 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1.11 minimum: the module uses the provider's write-only sensitive_body attribute, and
+      # write-only attributes only exist from Terraform 1.11.
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~> 1.9"
+          terraform_version: "~> 1.11"
 
       - name: PSScriptAnalyzer
         shell: pwsh
