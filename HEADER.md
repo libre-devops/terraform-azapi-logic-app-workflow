@@ -59,6 +59,12 @@ granular resources for properties the per-resource split cannot give you:
   workflow that dispatches to a sibling with `deploy_tier = 1`, and one whose target is itself a
   dispatcher (a router invoking a hooked handler, proven needed live) with `deploy_tier = 2`;
   each tier deploys after the ones below it, in the same module call.
+- **SAS can be turned off.** `trigger.sas_authentication_enabled = false` emits
+  `sasAuthenticationPolicy: Disabled`: the callback URL stops authenticating and the AAD policies
+  become the only HTTP door (native Workflow dispatch and connector triggers never used SAS). The
+  property is accepted by the resource provider on 2019-05-01 (proven against the ARM validate
+  endpoint) though absent from that version's published OpenAPI spec; a `check` flags SAS-off
+  with no policy, since that trigger accepts no HTTP caller at all.
 - **Plans stay quiet.** The default `response_export_values` is a trimmed stable set: `["*"]`
   echoes the whole GET response including volatile fields (`changedTime` and friends), which
   makes every plan a no-op update-in-place on every workflow (proven live). Widen it per

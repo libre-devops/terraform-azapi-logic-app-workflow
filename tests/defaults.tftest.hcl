@@ -1148,3 +1148,122 @@ run "rejects_policy_without_aud" {
 
   expect_failures = [var.workflows]
 }
+
+# sas_authentication_enabled = false emits the Disabled policy; the default emits nothing (the
+# platform default, SAS on, stays implicit).
+run "sas_off_renders_policy" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "HTTP - AAD-only trigger"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = {
+            allowed_ips                = ["0.0.0.0/0"]
+            sas_authentication_enabled = false
+            open_authentication_policies = {
+              "caller" = {
+                claims = {
+                  aud = "https://management.core.windows.net/"
+                  iss = "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.accessControl.triggers.sasAuthenticationPolicy.state == "Disabled"
+    error_message = "sas_authentication_enabled = false should emit the Disabled SAS policy."
+  }
+}
+
+run "sas_default_is_implicit" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "HTTP - Default SAS trigger"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = { allowed_ips = ["0.0.0.0/0"] }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.accessControl.triggers), "sasAuthenticationPolicy")
+    error_message = "The default (SAS on) should emit NO sasAuthenticationPolicy: omission is the platform default."
+  }
+}
+
+# SAS off with no policy leaves the trigger with no HTTP door at all; the check makes it visible.
+run "warns_on_sas_off_without_policies" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "HTTP - Dispatch-only trigger"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = {
+            allowed_ips                = ["0.0.0.0/0"]
+            sas_authentication_enabled = false
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [check.sas_off_without_policies_is_visible]
+}

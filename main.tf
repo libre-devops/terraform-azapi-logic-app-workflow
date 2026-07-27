@@ -103,6 +103,10 @@ locals {
               }
             }
           } : {},
+          # Emitted only when disabling: omission means the platform default (SAS on).
+          try(w.access_control.trigger.sas_authentication_enabled, true) ? {} : {
+            sasAuthenticationPolicy = { state = "Disabled" }
+          },
         )
       } : {},
     )

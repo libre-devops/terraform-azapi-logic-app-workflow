@@ -109,7 +109,14 @@ variable "workflows" {
                   right way to let an action group or app call an HTTP trigger without shared
                   SAS exposure. Every policy MUST pin an aud claim (the platform rejects a policy
                   without one; validated here at plan time). Policies ADMIT token callers; SAS
-                  stays valid alongside them on Consumption.
+                  stays valid alongside them unless trigger.sas_authentication_enabled = false
+                  turns it off, at which point the policies are the only HTTP door.
+                  DELIBERATE OMISSIONS from the full 2019-05-01 surface, each for cause:
+                  integrationServiceEnvironment (the ISE is a retired Azure offering; none can
+                  exist), openAuthenticationPolicies on the actions/contents/workflowManagement
+                  sections (the type is shared in the spec but the platform applies OAuth policies
+                  to trigger invocations only), and endpointsConfiguration (platform-populated
+                  regional IP lists; read them from the workflows output).
       enabled, integration_account_id  Pass-throughs (enabled maps to properties.state).
       deploy_tier  0 (default), 1 or 2; each tier deploys after the ones below it. ARM validates a
                   native Workflow dispatch action's TARGET at PUT time (NestedWorkflowNotFound,
@@ -166,6 +173,14 @@ variable "workflows" {
         open_authentication_policies = optional(map(object({
           claims = map(string)
         })), {})
+        # SAS (shared access signature) authentication on the trigger's callback URL. Default true,
+        # the platform default. false emits accessControl.triggers.sasAuthenticationPolicy
+        # {state: Disabled}: the SAS URL stops authenticating and open authentication policies
+        # carry the only HTTP door (native Workflow dispatch and managed-connector triggers do not
+        # ride SAS). The property is ACCEPTED by the resource provider on api-version 2019-05-01
+        # (proven against the ARM validate endpoint) although the published OpenAPI spec for that
+        # version does not document it.
+        sas_authentication_enabled = optional(bool, true)
       }))
     }))
 

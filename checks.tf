@@ -45,3 +45,17 @@ check "declared_parameters_have_values" {
     error_message = "At least one definition parameter has neither a supplied value nor a defaultValue: the workflow deploys but the run fails when the parameter is read."
   }
 }
+
+# SAS off with no open authentication policy means NOTHING can call the trigger over plain HTTP:
+# legitimate for workflows invoked only by native Workflow dispatch or connector triggers, but it
+# should never be a surprise.
+check "sas_off_without_policies_is_visible" {
+  assert {
+    condition = alltrue([
+      for w in values(var.workflows) :
+      try(w.access_control.trigger.sas_authentication_enabled, true) ||
+      length(try(w.access_control.trigger.open_authentication_policies, {})) > 0
+    ])
+    error_message = "At least one workflow disables SAS with NO open authentication policy: its trigger accepts no HTTP caller at all (only native Workflow dispatch and connector triggers can start it)."
+  }
+}
