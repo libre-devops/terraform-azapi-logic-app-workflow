@@ -107,7 +107,9 @@ variable "workflows" {
       access_control  IP restrictions for action/content/workflow_management, and for the trigger
                   additionally AAD open authentication policies (claims like iss/aud/appid), the
                   right way to let an action group or app call an HTTP trigger without shared
-                  SAS exposure.
+                  SAS exposure. Every policy MUST pin an aud claim (the platform rejects a policy
+                  without one; validated here at plan time). Policies ADMIT token callers; SAS
+                  stays valid alongside them on Consumption.
       enabled, integration_account_id  Pass-throughs (enabled maps to properties.state).
       deploy_tier  0 (default), 1 or 2; each tier deploys after the ones below it. ARM validates a
                   native Workflow dispatch action's TARGET at PUT time (NestedWorkflowNotFound,
@@ -277,5 +279,14 @@ variable "workflows" {
   validation {
     condition     = alltrue([for w in values(var.workflows) : contains([0, 1, 2], w.deploy_tier)])
     error_message = "deploy_tier must be 0 (default), 1 (deploys after tier 0; dispatches to leaves) or 2 (deploys after tiers 0 and 1; dispatches to tier-1 dispatchers)."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for w in values(var.workflows) : [
+        for pol in values(try(w.access_control.trigger.open_authentication_policies, {})) : contains(keys(pol.claims), "aud")
+      ]
+    ]))
+    error_message = "every open authentication policy must pin an 'aud' claim: the platform REJECTS a policy without one (MissingOAuthRequiredClaimValue, proven live), so fail here at plan time instead."
   }
 }

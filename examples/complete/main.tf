@@ -116,14 +116,17 @@ module "logic_app_workflow" {
       callback_trigger_name = "manual"
 
       # The caller set is not IP-stable (action groups, drills), so the honest IP control is the
-      # visible wide allow; the AAD open authentication policy is the real lock: callers must
-      # present a same-tenant AAD token instead of relying on SAS secrecy alone.
+      # visible wide allow; the AAD open authentication policy admits token-bearing callers
+      # ALONGSIDE the SAS (Consumption keeps SAS valid unless sasAuthenticationPolicy disables
+      # it). aud is REQUIRED in every policy (the RP rejects a policy without it, proven live);
+      # the ARM audience here means a plain `az account get-access-token` bearer proves the path.
       access_control = {
         trigger = {
           allowed_ips = ["0.0.0.0/0"]
           open_authentication_policies = {
             "same_tenant_caller" = {
               claims = {
+                aud = "https://management.core.windows.net/"
                 iss = "https://sts.windows.net/${data.azurerm_client_config.current.tenant_id}/"
               }
             }

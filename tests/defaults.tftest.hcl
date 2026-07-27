@@ -1105,3 +1105,46 @@ run "rejects_bad_tier" {
 
   expect_failures = [var.workflows]
 }
+
+# Validation: an open authentication policy without an aud claim is rejected at plan (the
+# platform requires aud: MissingOAuthRequiredClaimValue, proven live).
+run "rejects_policy_without_aud" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "HTTP - Policy missing aud"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = {
+            allowed_ips = ["0.0.0.0/0"]
+            open_authentication_policies = {
+              "issonly" = {
+                claims = {
+                  iss = "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}
