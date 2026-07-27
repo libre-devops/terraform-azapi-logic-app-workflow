@@ -1,0 +1,111 @@
+{
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "defaultValue": {}
+        },
+        "comment_suffix": {
+            "type": "String",
+            "metadata": {
+                "description": "Trailer appended to the acknowledgement comment; supplied by Terraform as a typed parameter value."
+            }
+        },
+        "retry_count": {
+            "type": "Int",
+            "defaultValue": 3,
+            "metadata": {
+                "description": "Retry attempts for the comment post. Has a defaultValue, so Terraform may leave it unset."
+            }
+        },
+        "notify_webhook_url": {
+            "type": "SecureString",
+            "metadata": {
+                "description": "Webhook the summary is POSTed to. SecureString: the value rides the provider's sensitive_body, never the plan or state body."
+            }
+        }
+    },
+    "triggers": {
+        "manual": {
+            "description": "Invoked over HTTPS with an incident-shaped payload (an automation rule dispatch, an action group receiver, or a drill).",
+            "type": "Request",
+            "kind": "Http",
+            "inputs": {
+                "schema": {}
+            }
+        }
+    },
+    "actions": {
+        "Response_-_Accepted": {
+            "description": "Acknowledge the dispatch (202) before doing the sync work, so a fire-and-forget caller is never held waiting.",
+            "type": "Response",
+            "inputs": {
+                "statusCode": 202,
+                "body": {
+                    "accepted": true
+                }
+            },
+            "runAfter": {}
+        },
+        "Compose_-_Summarise_the_incident": {
+            "description": "Builds the acknowledgement text. The prefix is a Terraform-owned scalar substituted into this template by templatefile (the ctrl+F contract); the suffix is a typed workflow parameter.",
+            "type": "Compose",
+            "inputs": "${comment_prefix}: @{coalesce(triggerBody()?['title'], 'unnamed incident')} @{parameters('comment_suffix')}",
+            "runAfter": {
+                "Response_-_Accepted": [
+                    "Succeeded"
+                ]
+            }
+        },
+        "Add_comment_to_the_incident": {
+            "description": "Writes the acknowledgement onto the Sentinel incident through the managed connector. The host rides the generated $connections parameter; auth is the workflow's own managed identity. The retry policy is explicit, never the silent default.",
+            "type": "ApiConnection",
+            "inputs": {
+                "host": {
+                    "connection": {
+                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                    }
+                },
+                "method": "post",
+                "path": "/Incidents/Comment",
+                "body": {
+                    "incidentArmId": "@triggerBody()?['incidentArmId']",
+                    "message": "<p>@{outputs('Compose_-_Summarise_the_incident')}</p>"
+                },
+                "retryPolicy": {
+                    "type": "exponential",
+                    "count": "@parameters('retry_count')",
+                    "interval": "PT10S",
+                    "maximumInterval": "PT1M"
+                }
+            },
+            "runAfter": {
+                "Compose_-_Summarise_the_incident": [
+                    "Succeeded"
+                ]
+            }
+        },
+        "HTTP_-_Notify_the_webhook": {
+            "description": "POSTs the summary to the notification webhook (a SecureString parameter). The example.com default fails deterministically, which is deliberate: any drill exercises the failure path without a third-party dependency.",
+            "type": "Http",
+            "inputs": {
+                "method": "POST",
+                "uri": "@parameters('notify_webhook_url')",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": "@outputs('Compose_-_Summarise_the_incident')",
+                "retryPolicy": {
+                    "type": "none"
+                }
+            },
+            "runAfter": {
+                "Add_comment_to_the_incident": [
+                    "Succeeded"
+                ]
+            }
+        }
+    },
+    "outputs": {}
+}

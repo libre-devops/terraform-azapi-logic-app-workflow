@@ -1,0 +1,24 @@
+{
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {},
+    "triggers": {
+        "Recurrence_daily": {
+            "description": "Fires once a day; the cheapest possible heartbeat (Consumption bills per action execution, fractions of a penny).",
+            "type": "Recurrence",
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1
+            }
+        }
+    },
+    "actions": {
+        "Compose_-_Say_the_greeting": {
+            "description": "Composes the greeting. The text is a Terraform-owned scalar, substituted into this template by templatefile: the ctrl+F contract in its smallest form.",
+            "type": "Compose",
+            "inputs": "${greeting}",
+            "runAfter": {}
+        }
+    },
+    "outputs": {}
+}
