@@ -212,6 +212,57 @@ resource "azapi_resource" "late" {
   depends_on = [azapi_resource.this]
 }
 
+# Tier 2: dispatchers whose targets are themselves tier 1 (a router invoking a handler that
+# carries its own dispatch hook). Keep this block textually in lockstep with the two above.
+resource "azapi_resource" "last" {
+  for_each = { for k, w in var.workflows : k => w if w.deploy_tier == 2 }
+
+  type      = "Microsoft.Logic/workflows@${var.api_version}"
+  name      = each.key
+  parent_id = var.resource_group_id
+  location  = var.location
+  # The title is not optional furniture: hidden-title is what the portal renders as the subtitle,
+  # and the standard requires it on every Logic App.
+  tags = merge(var.tags, coalesce(each.value.tags, {}), { "hidden-title" = each.value.title })
+
+  schema_validation_enabled = var.schema_validation_enabled
+
+  response_export_values  = each.value.response_export_values
+  ignore_missing_property = each.value.ignore_missing_property
+  ignore_null_property    = each.value.ignore_null_property
+  ignore_casing           = each.value.ignore_casing
+
+  identity {
+    type         = each.value.identity.type
+    identity_ids = each.value.identity.type == "UserAssigned" ? tolist(each.value.identity.identity_ids) : null
+  }
+
+  body = {
+    properties = merge(
+      {
+        state      = each.value.enabled ? "Enabled" : "Disabled"
+        definition = local.definitions[each.key]
+      },
+      length(local.workflow_parameters[each.key]) > 0 ? { parameters = local.workflow_parameters[each.key] } : {},
+      each.value.integration_account_id != null ? { integrationAccount = { id = each.value.integration_account_id } } : {},
+      each.value.access_control != null ? { accessControl = local.access_control[each.key] } : {},
+    )
+  }
+
+  # Secure parameter values are merge-patched into the PUT at request time and never appear in
+  # the plan output or the state's body. sensitive_body_version is deliberately NOT exposed:
+  # workflows update by FULL PUT, and the version map's semantics omit unchanged-version paths
+  # from the request, which would strip the secure parameter values off the workflow on every
+  # unrelated update. Without a version map the provider hashes the value into private state, so
+  # a rotated secret is still detected and the full sensitive_body rides every create and update
+  # (verified against the provider source, unmarshalSensitiveBody / ephemeralBodyChangeInPlan).
+  sensitive_body = length(local.secure_parameter_values[each.key]) > 0 ? {
+    properties = { parameters = local.secure_parameter_values[each.key] }
+  } : null
+
+  depends_on = [azapi_resource.this, azapi_resource.late]
+}
+
 
 # The per-workflow diagnostic setting (allLogs to Log Analytics) every production playbook
 # carries; named diag-<workflow> per the naming convention unless overridden. Driven through
@@ -219,7 +270,7 @@ resource "azapi_resource" "late" {
 locals {
   # Both tiers, one map: everything downstream (diagnostics, callback URLs, outputs) is
   # tier-agnostic.
-  workflow_resources = merge(azapi_resource.this, azapi_resource.late)
+  workflow_resources = merge(azapi_resource.this, azapi_resource.late, azapi_resource.last)
 }
 
 resource "azapi_resource" "diagnostics" {

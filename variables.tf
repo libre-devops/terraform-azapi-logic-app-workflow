@@ -109,11 +109,13 @@ variable "workflows" {
                   right way to let an action group or app call an HTTP trigger without shared
                   SAS exposure.
       enabled, integration_account_id  Pass-throughs (enabled maps to properties.state).
-      deploy_tier  0 (default) or 1. Tier 1 deploys AFTER every tier-0 workflow: ARM validates a
+      deploy_tier  0 (default), 1 or 2; each tier deploys after the ones below it. ARM validates a
                   native Workflow dispatch action's TARGET at PUT time (NestedWorkflowNotFound,
-                  proven live), so a workflow whose definition invokes a sibling by id must deploy
-                  in tier 1 (and reference the sibling by CONSTRUCTED ARM id, never this module's
-                  outputs, which would be a dependency cycle).
+                  proven live), so a workflow that invokes a sibling by id deploys a tier above
+                  that sibling: leaves are 0, their dispatchers are 1, and a dispatcher whose
+                  target is itself a dispatcher (a router invoking a hooked handler, proven
+                  needed live) is 2. Sibling references are CONSTRUCTED ARM ids, never this
+                  module's outputs (that would be a dependency cycle).
       response_export_values, ignore_missing_property, ignore_null_property, ignore_casing
                   azapi passthroughs, defaulted for a stable diff (see deploy_tier and the
                   trimmed response_export_values default).
@@ -273,7 +275,7 @@ variable "workflows" {
   }
 
   validation {
-    condition     = alltrue([for w in values(var.workflows) : contains([0, 1], w.deploy_tier)])
-    error_message = "deploy_tier must be 0 (default) or 1 (deploys after every tier-0 workflow; for definitions that dispatch to sibling workflows by id)."
+    condition     = alltrue([for w in values(var.workflows) : contains([0, 1, 2], w.deploy_tier)])
+    error_message = "deploy_tier must be 0 (default), 1 (deploys after tier 0; dispatches to leaves) or 2 (deploys after tiers 0 and 1; dispatches to tier-1 dispatchers)."
   }
 }

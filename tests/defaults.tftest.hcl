@@ -1058,6 +1058,11 @@ run "tier_one_deploys_late" {
     condition     = contains(keys(azapi_resource.late), "logic-ldo-uks-tst-02") && length(azapi_resource.late) == 1
     error_message = "Tier 1 should hold only the dispatching workflow."
   }
+
+  assert {
+    condition     = length(azapi_resource.last) == 0
+    error_message = "Tier 2 should be empty when nothing dispatches to a dispatcher."
+  }
 }
 
 # The default response_export_values is the trimmed stable set, never ["*"]: the full GET echo
@@ -1079,7 +1084,7 @@ run "rejects_bad_tier" {
     workflows = {
       "logic-ldo-uks-tst-01" = {
         title       = "Recurrence - Bad tier"
-        deploy_tier = 2
+        deploy_tier = 3
         definition  = <<-DEF
           {
             "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
