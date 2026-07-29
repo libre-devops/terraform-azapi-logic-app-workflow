@@ -41,7 +41,8 @@ granular resources for properties the per-resource split cannot give you:
   lockstep, and no four-resources-per-playbook scatter.
 - **The artefact is the portal export.** The definition deploys verbatim (decoded, never
   reshaped), so a portal export diffs cleanly against the rendered template: refactors are proven
-  by byte-identical renders, and drift review is a JSON diff, not archaeology.
+  by byte-identical renders, and drift review is a JSON diff, not archaeology. All three shapes
+  Azure hands you paste straight in (see [Authoring](#authoring-paste-it-straight-out-of-azure)).
 - **Whole-workflow lifecycle.** Create, update and destroy PUT/DELETE the workflow itself. A
   concurrency-singleton trigger can never hit `CannotDisableTriggerConcurrency` (proven live: that
   trap only fires when a trigger is PATCHed out of a live definition individually).
@@ -75,9 +76,42 @@ granular resources for properties the per-resource split cannot give you:
   deliberately not exposed, because its omit-unchanged-paths semantics would strip secure values
   from a full-resource PUT on unrelated updates.
 
-`checks` warn (never block) on the sharp edges: an empty call, a definition with no trigger, a
-connection the definition never references, and a declared parameter with neither a value nor a
-default (the class of error that otherwise surfaces at RUN time).
+The split between the two guard rails is evidence-based, not taste: anything the platform REJECTS
+is a plan-time `validation` (a valueless parameter, a policy with no `aud` claim, connections with
+no `$connections` declaration, a callback trigger that does not exist), each one confirmed against
+the ARM validate endpoint rather than assumed. `checks` only warn, and only about things that
+deploy cleanly and then bite later: an empty call, a definition with no trigger, a connection the
+definition never references, a `$connections` declaration with nothing wired to it, and a trigger
+with SAS off and no policy.
+
+## Authoring: paste it straight out of Azure
+
+`definition` takes the JSON in any of the three shapes Azure gives you, so there is nothing to
+reshape by hand and no way to get the wrapping wrong:
+
+| Copied from | Shape |
+|---|---|
+| Designer, Logic app code view | `{"definition": {...}, "parameters": {...}}` |
+| `az rest`, `az logic workflow show`, Export template | `{"properties": {"definition": {...}, ...}, "id": ..., "name": ...}` |
+| Another template in this shape | the bare definition, `{"$schema": ..., "triggers": ..., "actions": ...}` |
+
+The module unwraps the outer two and deploys the definition inside; a workflow definition has no
+top-level `definition` or `properties` key of its own, so the unwrap is unambiguous.
+
+A wrapper's own `parameters` block is DROPPED, deliberately. It holds the SOURCE environment's
+VALUES (live connection ids, a resolved `$connections` block, sometimes a secret someone typed
+into the designer), and values belong in the `parameters` and `connections` inputs, where they
+stay environment-specific and secure ones ride `sensitive_body` instead of sitting in a template
+file. Re-supply what the workflow needs; the plan tells you what is missing rather than the apply,
+because the engine rejects a valueless parameter outright (`InvalidTemplate`, "the value for the
+workflow parameter ... is not provided") and `$connections` left unwired trips a check.
+
+The portal's read-back fields survive the round trip untouched: `evaluatedRecurrence` on a
+Recurrence trigger deploys as pasted (accepted by the resource provider, proven against the ARM
+validate endpoint), so there is nothing to hand-strip before committing the template.
+
+So the round trip is: build it in the designer, open the code view, paste the whole thing into
+`templates/<name>.json.tftpl`, ctrl+F the values Terraform owns into `${tokens}`, plan.
 
 ## Usage
 
@@ -125,7 +159,9 @@ module "playbooks" {
   single scalar token: a daily Recurrence trigger and a Compose action.
 - [`examples/complete`](./examples/complete) - the estate shape: a real V1 Sentinel connection
   with managed identity auth, typed parameters including a SecureString, diagnostics, an AAD open
-  authentication policy on the trigger, and the callback URL output.
+  authentication policy on the trigger, and the callback URL output. Its second workflow is the
+  paste-in path proven end to end: an unedited portal code view export, wrapper and all, with one
+  ctrl+F token.
 
 Consumption workflows are free at rest, so unlike this module's Security Copilot sibling the
 examples are safe to apply and CI DOES live self-test them (apply then always destroy) on manual

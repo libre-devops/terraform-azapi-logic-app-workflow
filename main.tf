@@ -13,9 +13,26 @@
 #     parameterValueType "Alternative" PLUS the connectionProperties.authentication block inside
 #     the $connections parameter value, which this module generates.
 locals {
-  # Decoded once; the definition deploys verbatim (no reshaping), so a portal export diffs
-  # cleanly against the rendered template.
-  definitions = { for k, w in var.workflows : k => jsondecode(w.definition) }
+  # Decoded once, and UNWRAPPED: three shapes are accepted, because all three are what you get when
+  # you copy a working workflow out of Azure.
+  #   bare definition       {"$schema": ..., "contentVersion": ..., "triggers": {}, "actions": {}}
+  #   portal code view      {"definition": {...}, "parameters": {...}}
+  #   ARM resource GET      {"properties": {"definition": {...}, ...}, "id": ..., "name": ...}
+  # Only the definition is taken. Parameter VALUES carried by the outer two shapes belong to the
+  # SOURCE environment (live connection ids, a resolved $connections block, a secret someone typed
+  # into the designer); Terraform owns values through the parameters and connections inputs, so
+  # importing them would deploy another environment's state and hide secrets in a template file.
+  # A workflow definition has no top-level "definition" or "properties" key of its own, so the
+  # unwrap is unambiguous. The definition still deploys VERBATIM once unwrapped: never reshaped,
+  # so a portal export diffs cleanly against the rendered template.
+  definitions = {
+    for k, w in var.workflows : k => try(
+      jsondecode(w.definition).properties.definition,
+      jsondecode(w.definition).definition,
+      jsondecode(w.definition),
+      {},
+    )
+  }
 
   # Effective connections: the shared estate set merged under each workflow's own (same-key
   # workflow entries win); a workflow with use_shared_connections = false keeps only its own.

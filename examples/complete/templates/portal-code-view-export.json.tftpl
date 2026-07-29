@@ -1,0 +1,84 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "parameters": {
+            "reconciliation_window_hours": {
+                "type": "Int",
+                "defaultValue": 24,
+                "metadata": {
+                    "description": "How far back the reconciliation window reaches. Has a defaultValue, so Terraform may leave it unset: the value the wrapper below carries is dropped on unwrap and this default applies."
+                }
+            },
+            "run_note": {
+                "type": "String",
+                "metadata": {
+                    "description": "Free text stamped on the run summary. No defaultValue, so Terraform must supply it: the wrapper's value belongs to the environment this was exported from."
+                }
+            }
+        },
+        "triggers": {
+            "Recurrence": {
+                "description": "Fires on a schedule. evaluatedRecurrence is the portal's own read-back of the schedule and is left exactly as exported, to keep this template a byte-for-byte paste.",
+                "type": "Recurrence",
+                "recurrence": {
+                    "frequency": "Hour",
+                    "interval": 24,
+                    "startTime": "2024-01-01T02:00:00Z"
+                },
+                "evaluatedRecurrence": {
+                    "frequency": "Hour",
+                    "interval": 24,
+                    "startTime": "2024-01-01T02:00:00Z"
+                },
+                "conditions": [],
+                "operationOptions": "SingleInstance"
+            }
+        },
+        "actions": {
+            "Initialize_-_Reconciliation_window": {
+                "description": "Bounds the window this run reconciles, and stamps a correlation id every downstream action and log row can be joined on.",
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "windowEnd",
+                            "type": "string",
+                            "value": "@{utcNow()}"
+                        },
+                        {
+                            "name": "windowStart",
+                            "type": "string",
+                            "value": "@{addHours(utcNow(), mul(-1, parameters('reconciliation_window_hours')))}"
+                        },
+                        {
+                            "name": "runCorrelationId",
+                            "type": "string",
+                            "value": "@{guid()}"
+                        }
+                    ]
+                },
+                "runAfter": {}
+            },
+            "Compose_-_Run_summary": {
+                "description": "Builds the line a reviewer reads. The prefix is a Terraform-owned scalar substituted by templatefile (the ctrl+F contract); the note is a workflow parameter Terraform supplies.",
+                "type": "Compose",
+                "inputs": "${summary_prefix}: reconciled @{variables('windowStart')} to @{variables('windowEnd')} under correlation @{variables('runCorrelationId')} (@{parameters('run_note')})",
+                "runAfter": {
+                    "Initialize_-_Reconciliation_window": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "outputs": {}
+    },
+    "parameters": {
+        "reconciliation_window_hours": {
+            "value": 24
+        },
+        "run_note": {
+            "value": "whatever the environment this was exported from happened to be running"
+        }
+    }
+}

@@ -31,18 +31,21 @@ check "connections_are_referenced" {
   }
 }
 
-# A declared parameter with neither a supplied value nor a defaultValue deploys cleanly and then
-# fails at RUN time, the worst place to find out. ($connections is exempt: its value is generated
-# from the connections maps.)
-check "declared_parameters_have_values" {
+# $connections declared with nothing wired to it is the one valueless parameter the platform lets
+# through: the portal exports the declaration with "defaultValue": {}, so the empty object
+# satisfies the deploy and every connector action then fails at RUN time looking up a connection
+# that is not there. (Every OTHER valueless parameter fails the deploy outright, so that one is a
+# hard validation on var.workflows rather than a warning here.) This is the paste-in trap: a
+# definition lifted from the portal declares $connections because the source environment had
+# connections, and unwrapping deliberately drops that environment's connection ids.
+check "connections_parameter_is_wired" {
   assert {
-    condition = alltrue(flatten([
-      for k, w in var.workflows : [
-        for p_name, p_def in try(local.definitions[k].parameters, {}) :
-        p_name == "$connections" || contains(keys(w.parameters), p_name) || contains(try(keys(p_def), []), "defaultValue")
-      ]
-    ]))
-    error_message = "At least one definition parameter has neither a supplied value nor a defaultValue: the workflow deploys but the run fails when the parameter is read."
+    condition = alltrue([
+      for k, w in var.workflows :
+      !contains(keys(try(local.definitions[k].parameters, {})), "$connections") ||
+      length(local.effective_connections[k]) > 0
+    ])
+    error_message = "At least one workflow declares the $connections parameter with no connections configured: it deploys, then every connector action fails at RUN time. Wire the connection through connections or shared_connections, or drop the declaration."
   }
 }
 

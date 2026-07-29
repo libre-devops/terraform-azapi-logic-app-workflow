@@ -3,6 +3,7 @@ locals {
   rg_name    = "rg-${var.short}-${var.loc}-${terraform.workspace}-002"
   law_name   = "log-${var.short}-${var.loc}-${terraform.workspace}-002"
   logic_name = "logic-${var.short}-${var.loc}-${terraform.workspace}-02"
+  paste_name = "logic-${var.short}-${var.loc}-${terraform.workspace}-03"
   conn_name  = "conn-sentinel-${var.short}-${var.loc}-${terraform.workspace}-02"
 }
 
@@ -133,6 +134,28 @@ module "logic_app_workflow" {
           }
         }
       }
+    }
+
+    # The paste-in path, unedited on purpose: this template is a portal code view export exactly as
+    # the designer hands it over, wrapper and all ({"definition": {...}, "parameters": {...}}), with
+    # a single ctrl+F token. The module unwraps it and DROPS the wrapper's parameter values, because
+    # those belong to the environment it was exported from, so run_note below is the value that
+    # actually deploys and reconciliation_window_hours falls back to its defaultValue.
+    (local.paste_name) = {
+      title = "Recurrence - Reconcile a window and compose a run summary (pasted from the portal code view)"
+
+      definition = templatefile("${path.module}/templates/portal-code-view-export.json.tftpl", {
+        summary_prefix = var.comment_prefix
+      })
+
+      parameters = {
+        run_note = { type = "String", value = "supplied by Terraform, not by the pasted wrapper" }
+      }
+
+      # Nothing here rides a managed connector, so it opts out of the shared Sentinel connection
+      # the rest of the call inherits (a connection a definition never references is attack
+      # surface, and a check would flag it).
+      use_shared_connections = false
     }
   }
 }

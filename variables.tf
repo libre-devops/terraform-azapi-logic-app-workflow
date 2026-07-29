@@ -80,6 +80,20 @@ variable "workflows" {
                   export diffs cleanly against the template render. Parameter DECLARATIONS
                   (including $connections) live in the definition itself, exactly where the
                   portal exports them.
+                  THREE SHAPES ARE ACCEPTED, so anything you copy out of Azure pastes straight in:
+                  the bare definition ({"$schema", "contentVersion", "triggers", "actions", ...}),
+                  the portal code view, which wraps it as {"definition": {...}, "parameters": {...}},
+                  and an ARM resource GET (az rest / az logic workflow show), which wraps it as
+                  {"properties": {"definition": {...}, ...}, "id": ..., "name": ...}. The module
+                  unwraps the outer two and deploys the definition inside.
+                  A WRAPPER'S OWN parameters BLOCK IS IGNORED, deliberately: it holds the SOURCE
+                  environment's VALUES (live connection ids, a resolved $connections block, maybe a
+                  secret someone typed into the designer), and this module takes values from the
+                  parameters and connections inputs so they stay environment-specific and secrets
+                  stay out of the template. Re-supply anything you actually need: a declared
+                  parameter left with no value and no defaultValue FAILS THE PLAN (the engine
+                  rejects that deploy), and a $connections declaration with nothing wired to it
+                  warns through a check (it deploys, then fails at run time).
       parameters  Deployment VALUES for parameters the definition declares. Values are strings
                   (Terraform coerces numbers and bools, so value = 25 works; Object and Array
                   values pass jsonencode(...), the standard's rule for all workflow JSON); the
@@ -209,12 +223,24 @@ variable "workflows" {
     error_message = "definition must be valid JSON: pass the templatefile(...) or file(...) output of a portal-shaped workflow definition."
   }
 
+  # The unwrap chain (portal code view, ARM resource GET, bare) is repeated in the validations
+  # below rather than read from local.definitions: a validation on var.workflows cannot reference a
+  # local derived from var.workflows, that is a dependency cycle. Note the accessor sits OUTSIDE
+  # the try chain in every case, so an outer wrapper's parameter VALUES can never be mistaken for
+  # the definition's parameter DECLARATIONS.
   validation {
     condition = alltrue([
       for w in values(var.workflows) :
-      try(alltrue([for k in ["$schema", "contentVersion", "triggers", "actions"] : contains(keys(jsondecode(w.definition)), k)]), false)
+      try(alltrue([
+        for key in ["$schema", "contentVersion", "triggers", "actions"] :
+        contains(keys(try(
+          jsondecode(w.definition).properties.definition,
+          jsondecode(w.definition).definition,
+          jsondecode(w.definition),
+        )), key)
+      ]), false)
     ])
-    error_message = "definition must be a complete workflow definition ($schema, contentVersion, triggers, actions): the portal code-view export always carries all four."
+    error_message = "definition must be a complete workflow definition ($schema, contentVersion, triggers, actions), bare or wrapped. The portal code view wraps it under a top-level \"definition\" key and an ARM resource GET under \"properties.definition\"; both wrappers are unwrapped for you, so paste either one straight in. Anything else (a deployment template, a single action, a fragment) is not a workflow definition."
   }
 
   validation {
@@ -243,7 +269,11 @@ variable "workflows" {
   validation {
     condition = alltrue(flatten([
       for w in values(var.workflows) : [
-        for p_name in keys(w.parameters) : contains(try(keys(jsondecode(w.definition).parameters), []), p_name)
+        for p_name in keys(w.parameters) : contains(try(keys(try(
+          jsondecode(w.definition).properties.definition,
+          jsondecode(w.definition).definition,
+          jsondecode(w.definition),
+        ).parameters), []), p_name)
       ]
     ]))
     error_message = "every supplied parameter value must be DECLARED in the definition's parameters block: the definition is the contract, values only fill it."
@@ -254,11 +284,35 @@ variable "workflows" {
     error_message = "do not supply the $connections parameter yourself: the connections map generates it."
   }
 
+  # The engine REJECTS the deploy for this, it is not a run-time surprise: validating a definition
+  # declaring a valueless, defaultValue-less parameter returns InvalidTemplate, "The value for the
+  # workflow parameter 'x' at line '1' and column '448' is not provided" (proven against the ARM
+  # validate endpoint). Failing at plan beats failing at apply with a column offset into a minified
+  # blob. This is the one that bites on paste-in: a pasted definition declares everything the source
+  # environment supplied, and the wrapper's values are dropped on unwrap.
+  validation {
+    condition = alltrue(flatten([
+      for w in values(var.workflows) : [
+        for p_name, p_def in try(try(
+          jsondecode(w.definition).properties.definition,
+          jsondecode(w.definition).definition,
+          jsondecode(w.definition),
+        ).parameters, {}) :
+        p_name == "$connections" || contains(keys(w.parameters), p_name) || contains(try(keys(p_def), []), "defaultValue")
+      ]
+    ]))
+    error_message = "every parameter the definition DECLARES needs either a value in parameters or a defaultValue in the definition: the deploy is rejected otherwise (InvalidTemplate, the value is not provided). A definition pasted from the portal declares everything the source environment supplied, and the wrapper's values are dropped on unwrap, so re-supply them here. $connections is the exception: the connections map generates it."
+  }
+
   validation {
     condition = alltrue([
       for w in values(var.workflows) :
       length(merge(w.use_shared_connections ? var.shared_connections : {}, w.connections)) == 0 ||
-      contains(try(keys(jsondecode(w.definition).parameters), []), "$connections")
+      contains(try(keys(try(
+        jsondecode(w.definition).properties.definition,
+        jsondecode(w.definition).definition,
+        jsondecode(w.definition),
+      ).parameters), []), "$connections")
     ])
     error_message = "a workflow with connections needs the $connections parameter DECLARED in its definition (the portal export carries it); without the declaration the PUT is rejected."
   }
@@ -286,7 +340,11 @@ variable "workflows" {
     condition = alltrue([
       for w in values(var.workflows) :
       w.callback_trigger_name == null ||
-      contains(try(keys(jsondecode(w.definition).triggers), []), coalesce(w.callback_trigger_name, "?"))
+      contains(try(keys(try(
+        jsondecode(w.definition).properties.definition,
+        jsondecode(w.definition).definition,
+        jsondecode(w.definition),
+      ).triggers), []), coalesce(w.callback_trigger_name, "?"))
     ])
     error_message = "callback_trigger_name must name a trigger the definition declares."
   }

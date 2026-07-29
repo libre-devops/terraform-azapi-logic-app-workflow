@@ -587,6 +587,235 @@ run "rejects_incomplete_definition" {
   expect_failures = [var.workflows]
 }
 
+# The portal code view wraps the definition under a top-level "definition" key and carries the
+# SOURCE environment's parameter VALUES beside it. Paste it straight in: the definition unwraps and
+# deploys, and the wrapper's values are dropped, because values come from the parameters input.
+run "code_view_envelope_unwraps" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Pasted straight from the portal code view"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "greeting": { "type": "String", "defaultValue": "hello" }
+              },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_greeting": { "type": "Compose", "inputs": "@parameters('greeting')", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "greeting": { "value": "hello from the source environment" }
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.definition.triggers.Recurrence_daily.type == "Recurrence"
+    error_message = "The code view envelope should unwrap: properties.definition must be the INNER definition."
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.definition), "definition")
+    error_message = "The wrapper must never be deployed inside itself."
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties), "parameters")
+    error_message = "The wrapper's parameter VALUES belong to the source environment and must be dropped."
+  }
+}
+
+# The other thing you can paste: an ARM resource GET (az rest, az logic workflow show), which wraps
+# the definition one level deeper under properties, beside the source resource's own state.
+run "arm_resource_shape_unwraps" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Pasted from an ARM resource GET"
+        definition = <<-DEF
+          {
+            "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-source/providers/Microsoft.Logic/workflows/logic-source-01",
+            "name": "logic-source-01",
+            "type": "Microsoft.Logic/workflows",
+            "location": "westeurope",
+            "properties": {
+              "state": "Disabled",
+              "definition": {
+                "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {},
+                "triggers": {
+                  "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+                },
+                "actions": {
+                  "Compose_greeting": { "type": "Compose", "inputs": "hello", "runAfter": {} }
+                },
+                "outputs": {}
+              },
+              "parameters": {}
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.definition.triggers.Recurrence_daily.type == "Recurrence"
+    error_message = "The ARM resource shape should unwrap from properties.definition."
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.definition), "properties")
+    error_message = "The ARM wrapper must never be deployed inside the definition."
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.state == "Enabled"
+    error_message = "The SOURCE resource's state must not ride along: state comes from the enabled input."
+  }
+}
+
+# The sharp edge of paste-in: the envelope's $connections VALUE names the source environment's
+# connection. It must be dropped and regenerated from the connections input, or a paste silently
+# deploys a workflow pointing at another environment's connection.
+run "code_view_envelope_connections_are_regenerated" {
+  command = plan
+
+  variables {
+    shared_connections = {
+      "azuresentinel" = {
+        connection_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ldo-uks-tst-01/providers/Microsoft.Web/connections/conn-sentinel"
+        managed_api_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Web/locations/uksouth/managedApis/azuresentinel"
+        managed_identity_auth = true
+      }
+    }
+
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Pasted with the source environment's connection"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "$connections": { "type": "Object", "defaultValue": {} }
+              },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Get_incident": {
+                  "type": "ApiConnection",
+                  "runAfter": {},
+                  "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "get",
+                    "path": "/Incidents"
+                  }
+                }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "$connections": {
+                "value": {
+                  "azuresentinel": {
+                    "connectionId": "/subscriptions/99999999-9999-9999-9999-999999999999/resourceGroups/rg-source/providers/Microsoft.Web/connections/conn-from-another-estate",
+                    "connectionName": "conn-from-another-estate",
+                    "id": "/subscriptions/99999999-9999-9999-9999-999999999999/providers/Microsoft.Web/locations/westeurope/managedApis/azuresentinel"
+                  }
+                }
+              }
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters["$connections"].value.azuresentinel.connectionId == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ldo-uks-tst-01/providers/Microsoft.Web/connections/conn-sentinel"
+    error_message = "The generated $connections value must replace the pasted one: the source environment's connection id must never survive the paste."
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters["$connections"].value.azuresentinel.connectionProperties.authentication.type == "ManagedServiceIdentity"
+    error_message = "Managed identity auth should still be generated for a pasted definition."
+  }
+}
+
+# Validation: a wrapper carrying a fragment is still a fragment.
+run "rejects_wrapper_with_incomplete_definition" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Wrapped fragment"
+        definition = "{\"definition\": {\"$schema\": \"x\", \"contentVersion\": \"1.0.0.0\"}}"
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}
+
+# Validation: the wrapper's parameters block holds VALUES, not DECLARATIONS. A value supplied for a
+# parameter that only ever appears out there is still undeclared, and still rejected.
+run "rejects_value_for_wrapper_only_parameter" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Wrapper-only parameter"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {},
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_greeting": { "type": "Compose", "inputs": "hello", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "greeting": { "value": "hello from the source environment" }
+            }
+          }
+        DEF
+
+        parameters = {
+          greeting = { type = "String", value = "hello" }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}
+
 # Validation: a parameter value for a parameter the definition never declares is rejected.
 run "rejects_undeclared_parameter_value" {
   command = plan
@@ -972,8 +1201,10 @@ run "warns_on_unreferenced_connection" {
   expect_failures = [check.connections_are_referenced]
 }
 
-# A declared parameter with neither a value nor a defaultValue trips the run-time-failure check.
-run "warns_on_valueless_parameter" {
+# Validation: a declared parameter with neither a value nor a defaultValue is rejected at plan,
+# because the engine rejects it at DEPLOY (InvalidTemplate, "the value ... is not provided",
+# proven against the ARM validate endpoint).
+run "rejects_valueless_parameter" {
   command = plan
 
   variables {
@@ -1000,7 +1231,57 @@ run "warns_on_valueless_parameter" {
     }
   }
 
-  expect_failures = [check.declared_parameters_have_values]
+  expect_failures = [var.workflows]
+}
+
+# $connections is the exception the platform lets through: the portal exports it with
+# "defaultValue": {}, so an unwired declaration deploys and then fails at RUN time. A check, not a
+# validation, because it is a real (if unusual) intermediate state.
+run "warns_on_declared_connections_without_wiring" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Pasted connector workflow with no connection wired"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "$connections": { "type": "Object", "defaultValue": {} }
+              },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Get_incident": {
+                  "type": "ApiConnection",
+                  "runAfter": {},
+                  "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "get",
+                    "path": "/Incidents"
+                  }
+                }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "$connections": {
+                "value": {
+                  "azuresentinel": { "connectionId": "/subscriptions/99999999-9999-9999-9999-999999999999/resourceGroups/rg-source/providers/Microsoft.Web/connections/conn-from-another-estate" }
+                }
+              }
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  expect_failures = [check.connections_parameter_is_wired]
 }
 
 # Tier-1 workflows deploy through the late resource, after every tier-0 workflow (ARM validates a
