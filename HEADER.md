@@ -98,13 +98,30 @@ reshape by hand and no way to get the wrapping wrong:
 The module unwraps the outer two and deploys the definition inside; a workflow definition has no
 top-level `definition` or `properties` key of its own, so the unwrap is unambiguous.
 
-A wrapper's own `parameters` block is DROPPED, deliberately. It holds the SOURCE environment's
-VALUES (live connection ids, a resolved `$connections` block, sometimes a secret someone typed
-into the designer), and values belong in the `parameters` and `connections` inputs, where they
-stay environment-specific and secure ones ride `sensitive_body` instead of sitting in a template
-file. Re-supply what the workflow needs; the plan tells you what is missing rather than the apply,
-because the engine rejects a valueless parameter outright (`InvalidTemplate`, "the value for the
-workflow parameter ... is not provided") and `$connections` left unwired trips a check.
+A wrapper's own `parameters` block is ADOPTED (4.4.0). It holds the SOURCE environment's VALUES,
+and a portal export carries a value for every parameter its definition declares, so a paste
+deploys untouched rather than failing on values the module could see and chose to discard. That
+had been the one thing standing between "copy out of the portal" and "apply".
+
+Precedence, lowest to highest: a `defaultValue` inside the definition, then whatever the wrapper
+carried, then the `parameters` input, then the generated `$connections`. So naming a parameter in
+`parameters` always overrides what arrived with the paste.
+
+Two things are never adopted, each for cause:
+
+- **`$connections`**, because the wrapper's copy names the source environment's connection
+  resources. This module generates the whole value from the `connections` input instead.
+- **`SecureString` and `SecureObject`**, because a secret someone typed into the designer would
+  otherwise land in a template file, the plan output and the state's `body`. Secure values ride
+  `sensitive_body`, so they stay an explicit input and a secure declaration carrying only a
+  wrapper value is still rejected at plan.
+
+A bare definition contributes nothing here: its top-level `parameters` is its DECLARATIONS, not
+values, and reading those as values would make the check below vacuous.
+
+Anything still without a value fails the PLAN rather than the apply, because the engine rejects a
+valueless parameter outright (`InvalidTemplate`, "the value for the workflow parameter ... is not
+provided"), and `$connections` left unwired trips a check.
 
 The portal's read-back fields survive the round trip untouched: `evaluatedRecurrence` on a
 Recurrence trigger deploys as pasted (accepted by the resource provider, proven against the ARM

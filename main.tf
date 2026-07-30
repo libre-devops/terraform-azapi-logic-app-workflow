@@ -34,6 +34,48 @@ locals {
     )
   }
 
+  # Values the WRAPPER carried, keyed by workflow, when the paste actually WAS a wrapper.
+  #
+  # Two for-expressions rather than one conditional, for a reason that matters: a BARE definition's
+  # top-level "parameters" is its DECLARATIONS, not values, and reading those as values is the
+  # classic unwrap trap. Each expression selects on the shape that matched and takes values from
+  # that shape only, so a bare definition contributes nothing.
+  arm_wrapper_values = {
+    for k, w in var.workflows : k => try(jsondecode(w.definition).properties.parameters, {})
+    if can(jsondecode(w.definition).properties.definition)
+  }
+
+  code_view_wrapper_values = {
+    for k, w in var.workflows : k => try(jsondecode(w.definition).parameters, {})
+    if !can(jsondecode(w.definition).properties.definition) && can(jsondecode(w.definition).definition)
+  }
+
+  # The wrapper's values, filtered to what is safe and meaningful to adopt. Accepting the wrapper
+  # shape and then discarding the half that makes it deployable is incoherent: a portal export
+  # carries every value its definition declares, so a paste should just work.
+  #
+  # Three exclusions, each for cause:
+  #   $connections               this module generates it whole from the connections input, and the
+  #                              wrapper's copy names the SOURCE environment's connection resources.
+  #   SecureString/SecureObject  a secret typed into the designer would otherwise land in a template
+  #                              file, the plan output and the state's body. Secure values ride
+  #                              sensitive_body and stay an explicit input, so a secure declaration
+  #                              carrying only a wrapper value is still rejected at plan.
+  #   anything undeclared        a wrapper lists what the SOURCE environment supplied, which can
+  #                              outlive the declaration it belonged to.
+  wrapper_parameter_values = {
+    for k, w in var.workflows : k => {
+      for p_name, p in merge(
+        try(local.arm_wrapper_values[k], {}),
+        try(local.code_view_wrapper_values[k], {}),
+      ) : p_name => { value = p.value }
+      if p_name != "$connections"
+      && contains(try(keys(p), []), "value")
+      && contains(keys(try(local.definitions[k].parameters, {})), p_name)
+      && !contains(["SecureString", "SecureObject"], try(local.definitions[k].parameters[p_name].type, ""))
+    }
+  }
+
   # Effective connections: the shared estate set merged under each workflow's own (same-key
   # workflow entries win); a workflow with use_shared_connections = false keeps only its own.
   effective_connections = {
@@ -88,8 +130,13 @@ locals {
     )
   }
 
+  # Precedence, lowest to highest: a defaultValue inside the definition (applied by the engine when
+  # nothing is provided), then any value the wrapper carried, then the explicit parameters input,
+  # then the generated $connections. So a paste works untouched, and naming a parameter in the
+  # parameters input always overrides what came in with it.
   workflow_parameters = {
     for k, w in var.workflows : k => merge(
+      local.wrapper_parameter_values[k],
       local.parameter_values[k],
       contains(keys(local.connections_parameter_value), k) ? { "$connections" = { value = local.connections_parameter_value[k] } } : {},
     )

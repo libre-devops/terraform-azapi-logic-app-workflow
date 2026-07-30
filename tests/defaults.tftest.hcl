@@ -633,8 +633,13 @@ run "code_view_envelope_unwraps" {
   }
 
   assert {
-    condition     = !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties), "parameters")
-    error_message = "The wrapper's parameter VALUES belong to the source environment and must be dropped."
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters.greeting.value == "hello from the source environment"
+    error_message = "The wrapper's parameter VALUES must be ADOPTED: a portal export carries every value its definition declares, so a paste has to deploy untouched."
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.definition.parameters.greeting.defaultValue == "hello"
+    error_message = "Adopting a wrapper value must not rewrite the definition's own defaultValue; the value simply outranks it."
   }
 }
 
@@ -1547,4 +1552,214 @@ run "warns_on_sas_off_without_policies" {
   }
 
   expect_failures = [check.sas_off_without_policies_is_visible]
+}
+
+# ---------------------------------------------------------------------------------------------
+# Wrapper value adoption (4.4.0). A pasted wrapper carries every value its definition declares,
+# so it must deploy untouched. These pin the boundaries of that.
+# ---------------------------------------------------------------------------------------------
+
+# The whole point: a code view export with NO parameters input and NO defaultValue anywhere still
+# plans, because the wrapper supplied the value. This is the case that used to fail.
+run "wrapper_values_satisfy_declarations_with_no_input" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Pasted with values, nothing supplied"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "tenant_id": { "type": "String" },
+                "retry_count": { "type": "Int" },
+                "category_map": { "type": "Array" }
+              },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_tenant": { "type": "Compose", "inputs": "@parameters('tenant_id')", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "tenant_id": { "value": "11111111-2222-3333-4444-555555555555" },
+              "retry_count": { "value": 3 },
+              "category_map": { "value": [{ "contains": "x", "value": "y" }] }
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters.tenant_id.value == "11111111-2222-3333-4444-555555555555"
+    error_message = "A wrapper's String value must be adopted verbatim."
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters.retry_count.value == 3
+    error_message = "A wrapper's value keeps its real JSON type; it is not restringified."
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters.category_map.value[0].contains == "x"
+    error_message = "A wrapper's Array value must survive adoption intact."
+  }
+}
+
+# The explicit input still wins, so adoption can never quietly override what you configured.
+run "explicit_parameters_outrank_wrapper_values" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title = "Recurrence - Explicit beats pasted"
+        parameters = {
+          greeting = { type = "String", value = "from terraform" }
+        }
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": { "greeting": { "type": "String" } },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_greeting": { "type": "Compose", "inputs": "@parameters('greeting')", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": { "greeting": { "value": "from the source environment" } }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters.greeting.value == "from terraform"
+    error_message = "The parameters input must outrank a value the wrapper carried."
+  }
+}
+
+# The trap this change could have walked into: a BARE definition's top-level "parameters" is its
+# DECLARATIONS, not values. Reading those as values would make the validation vacuous and deploy a
+# declaration object as a value, so a bare definition must contribute nothing.
+run "bare_definition_declarations_are_not_values" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Bare definition, declarations only"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": { "greeting": { "type": "String" } },
+            "triggers": {
+              "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+            },
+            "actions": {
+              "Compose_greeting": { "type": "Compose", "inputs": "@parameters('greeting')", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}
+
+# Secrets stay out of the definition: a SecureString declaration carrying only a wrapper value is
+# still rejected, so the secret has to arrive through the input and ride sensitive_body.
+run "rejects_secure_parameter_supplied_only_by_wrapper" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "Recurrence - Secret pasted in the wrapper"
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": { "api_key": { "type": "SecureString" } },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_key": { "type": "Compose", "inputs": "@parameters('api_key')", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": { "api_key": { "value": "s3cret-typed-into-the-designer" } }
+          }
+        DEF
+      }
+    }
+  }
+
+  expect_failures = [var.workflows]
+}
+
+# A wrapper's $connections is the source environment's resolved block; the module regenerates it
+# from the connections input and must never adopt the pasted one.
+run "wrapper_connections_value_is_not_adopted" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title = "Recurrence - Pasted $connections ignored"
+        connections = {
+          "someapi" = {
+            connection_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ldo-uks-tst-01/providers/Microsoft.Web/connections/conn-someapi"
+            managed_api_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Web/locations/uksouth/managedApis/someapi"
+          }
+        }
+        definition = <<-DEF
+          {
+            "definition": {
+              "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": { "$connections": { "type": "Object", "defaultValue": {} } },
+              "triggers": {
+                "Recurrence_daily": { "type": "Recurrence", "recurrence": { "frequency": "Day", "interval": 1 } }
+              },
+              "actions": {
+                "Compose_noop": { "type": "Compose", "inputs": "noop", "runAfter": {} }
+              },
+              "outputs": {}
+            },
+            "parameters": {
+              "$connections": { "value": { "someapi": { "connectionId": "/subscriptions/SOURCE/x", "connectionName": "someapi", "id": "/subscriptions/SOURCE/y" } } }
+            }
+          }
+        DEF
+      }
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters["$connections"].value.someapi.connectionId == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ldo-uks-tst-01/providers/Microsoft.Web/connections/conn-someapi"
+    error_message = "$connections must be GENERATED from the connections input, never adopted from the paste."
+  }
+
+  assert {
+    condition     = !strcontains(jsonencode(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.parameters["$connections"]), "/subscriptions/SOURCE/")
+    error_message = "A pasted $connections names the SOURCE environment's connection resources and must not survive anywhere in the deployed value."
+  }
 }

@@ -298,10 +298,26 @@ variable "workflows" {
           jsondecode(w.definition).definition,
           jsondecode(w.definition),
         ).parameters, {}) :
-        p_name == "$connections" || contains(keys(w.parameters), p_name) || contains(try(keys(p_def), []), "defaultValue")
+        p_name == "$connections"
+        || contains(keys(w.parameters), p_name)
+        || contains(try(keys(p_def), []), "defaultValue")
+        # A value the WRAPPER carried counts, because it is now adopted. Read from the shape that
+        # matched and never from a bare definition, whose top-level "parameters" is its
+        # DECLARATIONS: treating those as values would make this validation vacuous. Secure types
+        # are excluded to match the adoption rule, so a secret still arrives through the input.
+        || (
+          !contains(["SecureString", "SecureObject"], try(p_def.type, ""))
+          && (
+            can(jsondecode(w.definition).properties.definition)
+            ? contains(keys(try(jsondecode(w.definition).properties.parameters, {})), p_name)
+            : can(jsondecode(w.definition).definition)
+            ? contains(keys(try(jsondecode(w.definition).parameters, {})), p_name)
+            : false
+          )
+        )
       ]
     ]))
-    error_message = "every parameter the definition DECLARES needs either a value in parameters or a defaultValue in the definition: the deploy is rejected otherwise (InvalidTemplate, the value is not provided). A definition pasted from the portal declares everything the source environment supplied, and the wrapper's values are dropped on unwrap, so re-supply them here. $connections is the exception: the connections map generates it."
+    error_message = "every parameter the definition DECLARES needs a value: in the parameters input, or a defaultValue in the definition, or carried by the wrapper you pasted (a portal code view export or an ARM resource GET, both of which this module adopts). The deploy is rejected otherwise (InvalidTemplate, the value is not provided). $connections is one exception, the connections map generates it; SecureString and SecureObject are the other, they must come through the parameters input so the secret rides sensitive_body rather than the definition."
   }
 
   validation {
