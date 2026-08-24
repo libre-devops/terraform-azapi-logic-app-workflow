@@ -40,8 +40,10 @@ none makes the schema accept less. The occurrence count is how many real actions
 | `initialize-variable-multiple` | 1 | `variables` is capped at `maxItems: 1`; a portal export from a live workflow carries three |
 
 Each correction is recorded in the output under `x-annotation.corrections`, with its pointer,
-reason and occurrence count, and is called out in the `description` at the node it changed. Report
-them upstream and delete the entry when fixed.
+reason and occurrence count, and is called out in the `description` at the node it changed.
+
+[`UPSTREAM-ISSUE.md`](./UPSTREAM-ISSUE.md) is the write-up ready to file with Microsoft, with the
+evidence and a reproduction. File it, then delete a correction here when the upstream fix lands.
 
 ## Using it
 
