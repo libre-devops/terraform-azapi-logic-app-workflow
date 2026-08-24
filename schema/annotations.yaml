@@ -1,0 +1,312 @@
+# Annotations layered onto the published Azure Logic Apps workflow definition schema.
+#
+# The upstream schema at
+# https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json
+# is machine generated: 147 KB, no `definitions` section, everything inlined through allOf/oneOf,
+# and descriptions like "The flow triggers." that restate the property name. It validates, but it
+# does not teach, and it says nothing about the behaviours that pass validation and then fail at
+# run time.
+#
+# This file is the annotation layer. `generate.py` fetches the upstream schema, merges each note
+# below into the `description` at that JSON Pointer, and writes the annotated schema as both JSON
+# and YAML. Keeping the notes here rather than in the generated files means the annotations stay
+# reviewable in a diff and survive an upstream refresh.
+#
+# Every pointer is asserted to exist at generate time, so an upstream reshape fails the build
+# rather than silently dropping a note.
+#
+# Sources for the notes, all checked 24 August 2026:
+#   https://learn.microsoft.com/en-us/azure/logic-apps/logic-apps-workflow-definition-language
+#   https://learn.microsoft.com/en-us/azure/logic-apps/workflow-definition-language-schema
+#   https://learn.microsoft.com/en-us/azure/logic-apps/logic-apps-workflow-actions-triggers
+#   https://learn.microsoft.com/en-us/azure/logic-apps/expression-functions-reference
+#   https://libredevops.org/docs/documents/azure-logic-app-standards
+---
+meta:
+  title: Azure Logic Apps workflow definition schema, annotated
+  upstream: https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json
+  annotated_by: Libre DevOps
+  annotations_checked: "2026-08-24"
+
+notes:
+  "": |
+    A Logic Apps workflow definition, schema version 2016-06-01.
+
+    THE SHAPE. Six properties carry everything: `triggers` starts the run, `actions` do the work,
+    `parameters` declares what varies between environments, `outputs` exposes results,
+    `contentVersion` stamps the definition, and `$schema` points here.
+
+    WHAT THIS DOCUMENT IS NOT. This schema describes the JSON. It does NOT describe the `@{...}`
+    runtime expression layer inside those strings. A definition can be schema-valid and still fail
+    at run time because an expression referenced a missing property or evaluated an operand it
+    should not have. See the expression functions reference, and the pitfalls section of the
+    Libre DevOps Logic App standard.
+
+    THERE IS NO YAML DIALECT. A workflow definition is JSON. The YAML rendering of THIS SCHEMA
+    exists for readability and for tools that accept YAML schemas; it does not mean a definition
+    may be written in YAML.
+
+    PLATFORM LIMITS the schema does not encode: maximum 250 actions, maximum 10 triggers. The
+    designer authors a single trigger; more than one is expressible only in the language itself.
+
+    DOCUMENTED BUT ABSENT: `staticResults`, referenced by `runtimeConfiguration.staticResult.name`
+    on an action, is documented as a definition-level attribute and is NOT declared in this
+    schema's root `properties`. Using it validates only because the root does not forbid unknown
+    properties.
+
+  "/properties/$schema": |
+    The schema location. Required by this document, and the string that makes an editor validate
+    the file as you type. Keep it as exported.
+
+  "/properties/contentVersion": |
+    Your version stamp for the definition, "1.0.0.0" by default. It is metadata: the platform does
+    not use it to order or reject deployments. Worth setting so a deployed workflow can be matched
+    back to a commit.
+
+  "/properties/description": |
+    Free text describing the workflow. Distinct from the `hidden-title` tag on the Azure resource,
+    which is what the portal list shows. Set both.
+
+  "/properties/metadata": |
+    Arbitrary key/value metadata carried with the definition. The designer writes its own entries
+    here. Leave what the designer put there alone: rewriting it is how a template stops diffing
+    cleanly against a fresh export.
+
+  "/properties/parameters": |
+    Parameter DECLARATIONS, not values. This is the single most misunderstood part of deploying a
+    workflow as code.
+
+    A declaration says a parameter exists, its type, and optionally a default and allowed values.
+    The VALUE lives outside the definition, in the ARM/azapi request body's `properties.parameters`.
+    A portal export carries both halves, which is why an unedited export deploys.
+
+    Anything declared here with no value anywhere fails at deploy with `InvalidTemplate`, "the
+    value for the workflow parameter ... is not provided". Catch it at plan time instead.
+
+    `$connections` is declared here like any other parameter, and its value is generated rather
+    than hand written. See the Logic App standard's connections section.
+
+  "/properties/parameters/additionalProperties/allOf/1/properties/defaultValue": |
+    Used when no value is supplied at deployment. Lowest precedence of everything that can set a
+    parameter, so treat it as a fallback rather than as configuration.
+
+    Never put a secret here. A `defaultValue` on a SecureString still lives in the definition file
+    and therefore in source control.
+
+  "/properties/parameters/additionalProperties/allOf/1/properties/allowedValues": |
+    Constrains the accepted values. Cheap and underused: it turns a typo in a tfvars file into a
+    deployment error rather than a workflow that runs and does the wrong thing.
+
+  "/properties/outputs": |
+    Values the run exposes when it finishes. Read them from the run history or, for a Request
+    trigger, return them with a Response action.
+
+    Outputs are evaluated at the END of the run, so an expression here that references an action
+    which was skipped evaluates against nothing. Guard with `if()` rather than assuming the happy
+    path ran.
+
+  "/properties/outputs/additionalProperties/allOf/0/properties/type": |
+    The eight WDL types: Array, Bool, Float, Int, Object, SecureObject, SecureString, String.
+
+    SecureString and SecureObject are the ones that matter operationally. Their values are masked
+    in run history and, deployed through the azapi module, ride the provider's write-only
+    `sensitive_body` so they never reach Terraform state or plan output. A secret typed into the
+    designer and exported lands in a template file, so it must be moved to a secure parameter.
+
+  "/properties/triggers": |
+    What starts a run. Every trigger is one of the nine types below and the key you give it is its
+    name, which is also the string every `@triggerBody()` and `runAfter` reference resolves
+    against. Renaming a trigger is a breaking change to the definition.
+
+    Maximum 10 triggers, though the designer authors one. Names are stored keys: keep the
+    designer's underscore-escaped form rather than tidying it.
+
+  "/properties/triggers/additionalProperties/allOf/1/properties/conditions": |
+    Guards that must be true for the trigger to fire. Filtering HERE is cheaper than filtering in a
+    first action, because on Consumption an action that runs is an action that bills.
+
+    Typical use: only act on incident creation rather than every enrichment update, or only on a
+    severity floor.
+
+  "/properties/triggers/additionalProperties/allOf/1/properties/splitOn": |
+    Debatching. Points at an array in the trigger output and starts one workflow RUN per element
+    rather than one run holding the array.
+
+    Two consequences people meet the hard way. Run count, and therefore Consumption cost, becomes
+    a function of payload size. And `splitOn` cannot be combined with a synchronous Response: each
+    element is its own run, so there is no single response to return.
+
+  "/properties/triggers/additionalProperties/allOf/1/properties/correlation": |
+    Sets the client tracking id for the run, which is what lets you find every run belonging to one
+    logical transaction across workflows. Set it from the upstream id (an incident number, a ticket
+    id) rather than leaving it to the platform, or cross-workflow triage becomes guesswork.
+
+  "/properties/actions": |
+    The work, and the execution graph. The key is the action name and it is a stored key: it is
+    what `runAfter` and `@body('name')` reference, and what appears in run history.
+
+    ORDERING IS `runAfter` AND NOTHING ELSE. There is no top-level sequence and the order keys
+    appear in the JSON is irrelevant. Deploying a definition whole keeps that as the only ordering
+    graph. Assembling the same workflow from per-resource Terraform resources creates a second
+    graph that can disagree with it.
+
+    Maximum 250 actions. The designer escapes spaces to underscores in names; keep its form.
+
+  "/properties/actions/additionalProperties/allOf/0/properties/runAfter": |
+    The dependency edge: a map of predecessor action name to the list of statuses that let this
+    action run.
+
+    `"runAfter": {}` means "run first". An action whose predecessor finishes in a status NOT listed
+    is Skipped, not failed, and its own successors then evaluate against Skipped.
+
+    THIS IS HOW TRY/CATCH IS BUILT. A catch action lists `["Failed", "TimedOut"]` on the scope it
+    guards; a finally action lists every terminal status. Getting the status list wrong produces a
+    workflow that silently skips its own error handling and reports success.
+
+    Statuses: Succeeded, Failed, Skipped, TimedOut, Cancelled, Aborted, Faulted, Ignored, Paused,
+    Running, Suspended, Waiting. In practice a hand-authored definition uses the first five.
+
+  "/properties/actions/additionalProperties/allOf/0/properties/trackedProperties": |
+    Key/value pairs emitted with the action's diagnostic record, so they are queryable in Log
+    Analytics without opening run history. This is the cheapest observability in Logic Apps and it
+    is almost always skipped.
+
+    Track the correlating ids (incident number, ticket id, tenant) rather than payloads: tracked
+    properties land in logs, so anything sensitive here is a data protection problem.
+
+  "/properties/actions/additionalProperties/allOf/1/properties/type": |
+    The action type, one of 38. Grouped by what they are for:
+
+    CONTROL FLOW: If, Switch, Foreach, Until, Scope, Terminate.
+    DATA: Compose, ParseJson, Query, Select, Table, Join, Expression.
+    VARIABLES: InitializeVariable, SetVariable, AppendToArrayVariable, AppendToStringVariable,
+    IncrementVariable, DecrementVariable.
+    CALLING OUT: Http, HttpWebhook, ApiConnection, ApiConnectionWebhook, ApiManagement, Function,
+    Workflow, SendToBatch, Batch.
+    REQUEST/RESPONSE: Request, Response.
+    INTEGRATION ACCOUNT: Liquid, Xslt, XmlValidation, FlatFileEncoding, FlatFileDecoding,
+    IntegrationAccountArtifactLookup.
+    OTHER: Wait, Recurrence, SlidingWindow.
+
+    `Workflow` dispatches to another workflow BY RESOURCE ID, and ARM validates that target exists
+    at PUT time (`NestedWorkflowNotFound`). Deploying a dispatcher therefore has to happen after
+    its target: the azapi module expresses that with `deploy_tier`.
+
+  "/properties/actions/additionalProperties/allOf/1/properties/operationOptions": |
+    Per-action behaviour switches. The two worth knowing:
+
+    `DisableAsyncPattern` makes an action that would return 202 and poll wait for the real result
+    instead, which is usually what you meant.
+
+    `SuppressWorkflowHeaders` stops Logic Apps injecting its own headers into an outbound request,
+    which some strict endpoints reject.
+
+  "/properties/actions/additionalProperties/allOf/1/properties/runtimeConfiguration": |
+    Per-action runtime settings, and the home of the retry policy.
+
+    `retryPolicy` defaults to `exponential`, 4 retries over roughly 20 seconds to 1 hour, on 408,
+    429 and 5xx ONLY. A 4xx that is not 408 or 429 never retries, so an auth failure fails
+    immediately, which is correct.
+
+    SET IT EXPLICITLY on anything that calls out. The default is rarely the right budget, and an
+    inherited default is a decision nobody made. `"type": "none"` is the honest way to say a call
+    must not be retried, which matters for anything non-idempotent.
+
+    `staticResult` names an entry in the definition-level `staticResults` object to return mock
+    outputs, for testing. Note that `staticResults` itself is not declared in this schema.
+
+    `concurrency` caps parallel iterations on Foreach and Until. Leaving it unset means the
+    platform picks, and a debatched trigger plus unbounded concurrency is how a downstream API
+    gets rate limited by your own workflow.
+
+  "/properties/triggers/additionalProperties/allOf/2/oneOf/1": |
+    THE CATCH-ALL TRIGGER BRANCH. This branch declares no `type` and no properties, so it accepts
+    any trigger shape the eight typed branches above do not.
+
+    That is why an `ApiConnectionWebhook` trigger validates: the schema has no branch modelling it,
+    despite it being a documented managed API trigger type and the shape of the Sentinel incident
+    trigger that starts most SOAR playbooks. It passes because nothing checks it, not because it
+    was checked.
+
+    Practical consequence: a typo inside an ApiConnectionWebhook trigger is not caught here. The
+    plan-time guards in the azapi module cover the parts that matter (the `$connections` wiring and
+    the callback trigger name); the rest is caught at deploy.
+
+# ---------------------------------------------------------------------------------------------
+# Corrections.
+#
+# The published schema rejects workflow definitions that Azure itself emits and deploys. These are
+# not opinions: each one was found by validating 87 real workflow definitions from this workspace
+# against the upstream schema, and the occurrence count is how many real actions it rejected.
+#
+# `generate.py` applies these to the annotated outputs and records them under `x-annotation`, so
+# the annotated schema is usable as an editor schema without redlining correct code. Every change
+# WIDENS what is accepted; none of them makes the schema accept less.
+#
+# Report upstream and delete the entry when it is fixed.
+# ---------------------------------------------------------------------------------------------
+corrections:
+  - id: retry-policy-type-casing
+    pointer: /properties/actions/additionalProperties/allOf/2/oneOf/0/properties/inputs/allOf/1/properties/retryPolicy/properties/type
+    op: enum_add
+    values: [none, fixed, exponential]
+    occurrences: 39
+    why: >-
+      The schema declares the enum PascalCase as None, Fixed and Exponential. The designer, every
+      Microsoft example and every real definition use lowercase. Both cases are accepted by the
+      platform, so the enum is widened rather than replaced.
+
+  - id: retry-policy-count-expression
+    pointer: /properties/actions/additionalProperties/allOf/2/oneOf/0/properties/inputs/allOf/1/properties/retryPolicy/properties/count
+    op: type_union
+    values: [integer, string]
+    occurrences: 5
+    why: >-
+      Declared `integer`, which rejects `"count": "@parameters('retry_count')"`. Any WDL value may
+      be an expression string, so a typed scalar that does not also accept `string` is wrong
+      wherever an expression is legal. This is the general defect; `count` is where it bites.
+
+  - id: authentication-managed-identity
+    pointer: /properties/actions/additionalProperties/allOf/2/oneOf/0/properties/inputs/allOf/1/properties/authentication
+    op: oneof_add
+    occurrences: 28
+    value:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [ManagedServiceIdentity]
+          description: The HTTP authentication type.
+        identity:
+          type: string
+          description: The resource id of a user-assigned managed identity. Omit for the system-assigned identity.
+        audience:
+          type: string
+          description: The audience the token is requested for, for example https://management.azure.com.
+      description: >-
+        Managed identity authentication. Added by Libre DevOps: the 2016-06-01 schema predates it
+        and has no branch for it, so the standard way to authenticate an Http action to an Azure
+        endpoint fails validation upstream.
+    why: >-
+      The `authentication` oneOf carries Basic, ClientCertificate, None, ActiveDirectoryOAuth and
+      Raw, but not ManagedServiceIdentity, which is the recommended and most common auth type for
+      an Http action calling Azure. 28 real actions in this workspace are rejected by it.
+
+  - id: variable-type-casing
+    pointer: /properties/actions/additionalProperties/allOf/2/oneOf/33/properties/inputs/definitions/FlowVariableDataType
+    op: enum_add
+    values: [array, boolean, float, integer, object, string]
+    occurrences: 3
+    why: >-
+      Same casing defect as the retry policy, on InitializeVariable and SetVariable. The schema
+      declares Array, Boolean, Float, Integer, Object, String; the designer emits lowercase.
+
+  - id: initialize-variable-multiple
+    pointer: /properties/actions/additionalProperties/allOf/2/oneOf/34/properties/inputs/properties/variables
+    op: remove_key
+    values: [maxItems]
+    occurrences: 1
+    why: >-
+      The schema caps `variables` at one item. The designer only offers one, but a portal code view
+      export taken from a live workflow in this workspace carries three, so the platform both emits
+      and accepts more. `minItems` is left in place.
