@@ -156,7 +156,11 @@ locals {
       } : {},
       w.access_control.trigger != null ? {
         triggers = merge(
-          { allowedCallerIpAddresses = [for ip in try(w.access_control.trigger.allowed_ips, []) : { addressRange = ip }] },
+          # Written only when set: an empty list means "other Logic Apps only" to the platform, so
+          # leaving it out is the only way to let the token or SAS alone be the gate.
+          w.access_control.trigger.allowed_ips != null ? {
+            allowedCallerIpAddresses = [for ip in w.access_control.trigger.allowed_ips : { addressRange = ip }]
+          } : {},
           length(try(w.access_control.trigger.open_authentication_policies, {})) > 0 ? {
             openAuthenticationPolicies = {
               policies = {

@@ -116,14 +116,14 @@ module "logic_app_workflow" {
       # The SAS URL an action group receiver would post to.
       callback_trigger_name = "manual"
 
-      # The caller set is not IP-stable (action groups, drills), so the honest IP control is the
-      # visible wide allow; the AAD open authentication policy admits token-bearing callers
+      # The caller set is not IP-stable (action groups, drills), so no allowed_ips: with none,
+      # no caller IP list is written and any address may call (an EMPTY list would mean other
+      # Logic Apps only). The AAD open authentication policy admits token-bearing callers
       # ALONGSIDE the SAS (Consumption keeps SAS valid unless sasAuthenticationPolicy disables
       # it). aud is REQUIRED in every policy (the RP rejects a policy without it, proven live);
       # the ARM audience here means a plain `az account get-access-token` bearer proves the path.
       access_control = {
         trigger = {
-          allowed_ips = ["0.0.0.0/0"]
           open_authentication_policies = {
             "same_tenant_caller" = {
               claims = {
