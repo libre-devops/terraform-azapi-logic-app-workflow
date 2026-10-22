@@ -125,6 +125,11 @@ variable "workflows" {
                   without one; validated here at plan time). Policies ADMIT token callers; SAS
                   stays valid alongside them unless trigger.sas_authentication_enabled = false
                   turns it off, at which point the policies are the only HTTP door.
+                  trigger.allowed_ips: null (the default) writes no caller IP list, so any
+                  address may call and the token or SAS is the gate; a list admits only those
+                  ranges; an EMPTY list is what the platform reads as "other Logic Apps only"
+                  and shuts out every other caller (proven live: AuthorizationFailed ... not in
+                  the allowed caller IP address ranges).
                   DELIBERATE OMISSIONS from the full 2019-05-01 surface, each for cause:
                   integrationServiceEnvironment (the ISE is a retired Azure offering; none can
                   exist), openAuthenticationPolicies on the actions/contents/workflowManagement
@@ -183,7 +188,7 @@ variable "workflows" {
       content_allowed_ips             = optional(list(string))
       workflow_management_allowed_ips = optional(list(string))
       trigger = optional(object({
-        allowed_ips = optional(list(string), [])
+        allowed_ips = optional(list(string))
         open_authentication_policies = optional(map(object({
           claims = map(string)
         })), {})

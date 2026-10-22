@@ -1435,6 +1435,82 @@ run "rejects_policy_without_aud" {
   expect_failures = [var.workflows]
 }
 
+# A trigger with policies and no allowed_ips writes no caller IP list, so the token is the gate.
+# An explicit empty list is still written: the platform reads it as other Logic Apps only.
+run "trigger_ips_unset_are_omitted_and_empty_is_kept" {
+  command = plan
+
+  variables {
+    workflows = {
+      "logic-ldo-uks-tst-01" = {
+        title      = "HTTP - Token is the gate"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = {
+            open_authentication_policies = {
+              "caller" = {
+                claims = {
+                  iss = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+                  aud = "00000000-0000-0000-0000-0000000000a1"
+                }
+              }
+            }
+            sas_authentication_enabled = false
+          }
+        }
+      }
+      "logic-ldo-uks-tst-02" = {
+        title      = "HTTP - Logic Apps only"
+        definition = <<-DEF
+          {
+            "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {},
+            "triggers": {
+              "manual": { "type": "Request", "kind": "Http", "inputs": { "schema": {} } }
+            },
+            "actions": {
+              "Compose_ack": { "type": "Compose", "inputs": "ok", "runAfter": {} }
+            },
+            "outputs": {}
+          }
+        DEF
+
+        access_control = {
+          trigger = { allowed_ips = [] }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      !contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.accessControl.triggers), "allowedCallerIpAddresses") &&
+      contains(keys(azapi_resource.this["logic-ldo-uks-tst-01"].body.properties.accessControl.triggers), "openAuthenticationPolicies")
+    )
+    error_message = "With allowed_ips unset, no caller IP list is written, so the token alone is the gate."
+  }
+
+  assert {
+    condition     = length(azapi_resource.this["logic-ldo-uks-tst-02"].body.properties.accessControl.triggers.allowedCallerIpAddresses) == 0
+    error_message = "An explicit empty list is written as it is (the platform reads it as other Logic Apps only)."
+  }
+}
+
 # sas_authentication_enabled = false emits the Disabled policy; the default emits nothing (the
 # platform default, SAS on, stays implicit).
 run "sas_off_renders_policy" {
